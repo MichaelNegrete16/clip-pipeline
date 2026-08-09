@@ -1,0 +1,59 @@
+# Blacklist base en español. Formato:  termino | severidad
+#   bleep  -> se pita la palabra y se enmascara en el subtítulo
+#   reject -> el clip completo se descarta, ni pitado se publica
+#
+# CURADA A PROPÓSITO, no volcada de una lista genérica de internet. El español varía
+# muchísimo por país: "coger" es normal en España y vulgar en México; "concha" es
+# inocente en Colombia y fuerte en Argentina; "boludo" o "pendejo" cambian de peso
+# según dónde. Una lista genérica te pita medio video y mata los chistes.
+#
+# Criterio: se marca lo que de verdad afecta la monetización de YouTube (política de
+# contenido apto para anunciantes), no toda palabrota. Las groserías suaves usadas de
+# forma cariñosa entre streamers NO están aquí a propósito.
+#
+# Ajústala desde el panel: Canales -> Blacklist de palabras.
+
+# ── Insultos fuertes ───────────────────────────────────────────────────────────
+hijueputa | bleep
+hijoputa | bleep
+hijodeputa | bleep
+malparido | bleep
+malparida | bleep
+gonorrea | bleep
+cabron | bleep
+gilipollas | bleep
+pendejo | bleep
+puta | bleep
+puto | bleep
+mierda | bleep
+joder | bleep
+cojones | bleep
+verga | bleep
+chinga | bleep
+chingar | bleep
+pinche | bleep
+culero | bleep
+maricon | bleep
+marica | bleep
+coño | bleep
+zorra | bleep
+perra | bleep
+imbecil | bleep
+estupido | bleep
+idiota | bleep
+
+# ── Sexual explícito ───────────────────────────────────────────────────────────
+follar | bleep
+polla | bleep
+pene | bleep
+tetas | bleep
+culo | bleep
+sexo | bleep
+
+# ── Descarte total: nada de esto se publica, ni censurado ──────────────────────
+# Slurs y temas que hunden un canal entero, no sólo la monetización del video.
+violacion | reject
+violar | reject
+suicidio | reject
+suicidarse | reject
+nazi | reject

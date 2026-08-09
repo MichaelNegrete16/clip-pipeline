@@ -1,0 +1,8 @@
+.env
+data/*.db
+data/*.db-journal
+media/
+__pycache__/
+*.pyc
+.venv/
+node_modules/

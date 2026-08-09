@@ -1,0 +1,52 @@
+# Streamers hispanohablantes grandes de Twitch y Kick.
+# Formato: URL completa (un nombre suelto se asume de Kick).
+# Los que no existan o no tengan clips se reportan y se saltan.
+
+# ── TWITCH ─────────────────────────────────────────────────────────────────────
+https://twitch.tv/ibai
+https://twitch.tv/auronplay
+https://twitch.tv/elxokas
+https://twitch.tv/thegrefg
+https://twitch.tv/juansguarnizo
+https://twitch.tv/illojuan
+https://twitch.tv/rubius
+https://twitch.tv/elmariana
+https://twitch.tv/alexby11
+https://twitch.tv/willyrex
+https://twitch.tv/vegetta777
+https://twitch.tv/mangel
+https://twitch.tv/luzu
+https://twitch.tv/perxitaa
+https://twitch.tv/arigameplays
+https://twitch.tv/spreen
+https://twitch.tv/coscu
+https://twitch.tv/momo
+https://twitch.tv/davooxeneize
+https://twitch.tv/zeling
+https://twitch.tv/elded
+https://twitch.tv/knekro
+https://twitch.tv/nategentile7
+https://twitch.tv/folagorlives
+https://twitch.tv/biyin_
+https://twitch.tv/roier
+https://twitch.tv/quackity
+https://twitch.tv/carreragg
+https://twitch.tv/luquitarodriguez
+https://twitch.tv/paracetamor
+
+# ── KICK ───────────────────────────────────────────────────────────────────────
+https://kick.com/westcol
+https://kick.com/brunenger
+https://kick.com/lacobraaa
+https://kick.com/davooxeneize
+https://kick.com/zeling
+https://kick.com/spreen
+https://kick.com/elmariana
+https://kick.com/coscu
+https://kick.com/momo
+https://kick.com/carreraaa
+https://kick.com/luquitarodriguez
+https://kick.com/roberpapo
+https://kick.com/tumbler
+https://kick.com/juansguarnizo
+https://kick.com/ampeterby7

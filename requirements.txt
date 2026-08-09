@@ -1,0 +1,27 @@
+# Versiones fijadas a lo que está probado y funcionando en desarrollo.
+# Instalar con:  pip install -r requirements.txt
+
+# ── API y panel ────────────────────────────────────────────────────────────────
+fastapi==0.141.1
+uvicorn[standard]==0.52.1
+
+# ── Ingesta y clientes de plataforma ───────────────────────────────────────────
+requests==2.32.3
+
+# ── Render ─────────────────────────────────────────────────────────────────────
+yt-dlp==2026.7.4
+pillow==12.3.0
+
+# ── Transcripción y censura ────────────────────────────────────────────────────
+# faster-whisper arrastra ctranslate2; en CPU va con compute_type="int8".
+faster-whisper==1.2.1
+
+# ── Utilidades ─────────────────────────────────────────────────────────────────
+# tzdata hace falta en Windows para zoneinfo; en Linux normalmente ya está el
+# sistema de zonas horarias, pero no estorba.
+tzdata==2025.3
+numpy==2.5.1
+
+# NO va en pip — hay que instalarlo aparte en el sistema:
+#   Linux:   sudo apt install ffmpeg fonts-dejavu-core
+#   Windows: winget install Gyan.FFmpeg
