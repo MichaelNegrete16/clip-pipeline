@@ -26,6 +26,7 @@ sys.path.insert(0, str(ROOT / "render"))
 
 import db as db_mod            # noqa: E402
 import pipeline as pipe        # noqa: E402
+import categories              # noqa: E402
 import fun                     # noqa: E402
 import titles                  # noqa: E402
 import youtube_client as yt    # noqa: E402
@@ -185,7 +186,7 @@ def delete_source(source_id: int):
 def list_clips(source_id: int | None = None, min_views: int = 0, max_duration: int = 90,
                min_duration: int = 8, window: str = "week", status: str = "all",
                sort: str = "views", min_age_hours: int = 12, limit: int = 200,
-               profile_slug: str = DEFAULT_PROFILE[0]):
+               profile_slug: str = DEFAULT_PROFILE[0], category_group: str | None = None):
     """Lista candidatos. Por defecto, frescos (última semana) y ya madurados.
 
     `min_age_hours` existe porque un clip recién publicado tiene 0 vistas: si no se le
@@ -197,6 +198,9 @@ def list_clips(source_id: int | None = None, min_views: int = 0, max_duration: i
     if source_id:
         where.append("c.source_id = ?")
         params.append(source_id)
+    if category_group:
+        where.append("COALESCE(c.category_group, 'Otros') = ?")
+        params.append(category_group)
 
     days = {"day": 1, "week": 7, "month": 30}.get(window)
     if days:
@@ -722,6 +726,38 @@ def upload_to_youtube(queue_id: int, body: UploadReq):
                 "note": ("Subido como privado. Mientras el proyecto no pase la auditoría "
                          "de YouTube, las subidas quedan forzadas a privado aunque pidas "
                          "público.") if result["privacy"] != body.privacy else None}
+    finally:
+        conn.close()
+
+
+# ── CATEGORÍAS ─────────────────────────────────────────────────────────────────
+@app.get("/api/categories")
+def list_categories(days: int = 30, min_views: int = 300, profile_slug: str | None = None):
+    """Familias de categorías con lo que produce cada una y quién manda en ella."""
+    conn = get_conn()
+    try:
+        source_ids = None
+        if profile_slug and profile_slug != DEFAULT_PROFILE[0]:
+            row = conn.execute("SELECT id FROM profiles WHERE slug=?",
+                               (profile_slug,)).fetchone()
+            if row:
+                source_ids = [r["source_id"] for r in conn.execute(
+                    "SELECT source_id FROM profile_sources WHERE profile_id=?",
+                    (row["id"],))] or None
+
+        return {"groups": categories.stats(conn, days=days, min_views=min_views,
+                                           source_ids=source_ids),
+                "order": categories.GROUP_ORDER, "days": days, "min_views": min_views}
+    finally:
+        conn.close()
+
+
+@app.post("/api/categories/refresh")
+def refresh_categories():
+    """Reclasifica todos los clips. Se corre tras cambiar las reglas de agrupación."""
+    conn = get_conn()
+    try:
+        return categories.refresh_groups(conn)
     finally:
         conn.close()
 

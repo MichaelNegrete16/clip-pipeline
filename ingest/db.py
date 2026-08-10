@@ -286,6 +286,10 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     # Identifica el racimo: todos los clips del mismo momento comparten clave.
     # Sirve para publicar UNO por momento y no repetir el mismo chiste 15 veces.
     ("clip_candidates", "cluster_key", "TEXT"),
+    # Twitch usa una categoría por juego; agruparlas en familias es lo que hace
+    # utilizable el filtro. `parent_category` es la agrupación nativa de Kick.
+    ("clip_candidates", "category_group", "TEXT"),
+    ("clip_candidates", "parent_category", "TEXT"),
     # Sin esto no hay forma de distinguir un render vivo de uno que murió con el
     # proceso: la fila se quedaba en 'rendering' y bloqueaba los reintentos.
     ("renders", "updated_at", "TEXT"),

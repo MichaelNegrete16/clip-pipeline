@@ -10,6 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import categories
 import db as db_mod
 import kick_client
 import twitch_client
@@ -109,8 +110,9 @@ def ingest_source(conn: sqlite3.Connection, platform: str, slug: str,
             INSERT INTO clip_candidates (
                 source_id, platform_clip_id, title, views, likes, duration_s, created_at,
                 video_url, embed_url, clip_page_url, thumbnail_url, category,
-                creator_username, is_mature, views_per_day, vod_offset, livestream_id
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                creator_username, is_mature, views_per_day, vod_offset, livestream_id,
+                category_group, parent_category
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT (source_id, platform_clip_id) DO UPDATE SET
                 views         = excluded.views,
                 likes         = excluded.likes,
@@ -130,6 +132,8 @@ def ingest_source(conn: sqlite3.Connection, platform: str, slug: str,
                 (c.get("creator") or {}).get("username"), int(bool(c.get("is_mature"))),
                 round(views_per_day(views, c.get("created_at")), 2),
                 c.get("vod_offset"), c.get("livestream_id"),
+                categories.group_for((c.get("category") or {}).get("name")),
+                c.get("parent_category"),
             ),
         )
         row = conn.execute(

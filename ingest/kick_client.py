@@ -97,4 +97,7 @@ def normalize(clip: dict) -> dict:
         "vod_offset": clip.get("vod_starts_at") or None,
         "livestream_id": str(clip.get("livestream_id") or "") or None,
         "clip_page_url": f"https://kick.com/clips/{clip['id']}",
+        # Kick trae su propia agrupación de categorías ('games', 'irl', ...), que
+        # Twitch no da. Sirve de contraste para nuestra clasificación.
+        "parent_category": (clip.get("category") or {}).get("parent_category"),
     }
