@@ -263,6 +263,12 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     ("profiles", "output_format", "TEXT NOT NULL DEFAULT 'short'"),
     ("profiles", "vertical_style", "TEXT NOT NULL DEFAULT 'blur'"),
     ("profiles", "cta_enabled", "INTEGER NOT NULL DEFAULT 1"),
+    # Separación mínima entre PUBLICACIONES del mismo canal. Publicar varios videos
+    # seguidos desde un canal chico parece automatizado y YouTube corta su
+    # distribución: pasó con 3 de los 6 primeros, subidos con 21 segundos de diferencia.
+    ("profiles", "min_publish_gap_min", "INTEGER NOT NULL DEFAULT 45"),
+    # Momento real de la llamada a la API, distinto de published_at cuando se programa.
+    ("uploads", "uploaded_at", "TEXT"),
     # Título/descripción/tags propuestos por el bot, editables antes de subir.
     ("profile_queue", "title", "TEXT"),
     ("profile_queue", "description", "TEXT"),

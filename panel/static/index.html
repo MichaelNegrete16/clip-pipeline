@@ -873,15 +873,21 @@ async function doUpload(qid, schedule){
     alert('Este canal no tiene YouTube conectado.\nVe a la pestaña Canales y conéctalo.');
     return;
   }
-  const cuando = schedule
-    ? (info.next_slot_local
-        ? `programado para el ${info.next_slot_local} (${info.timezone})`
-        : null)
-    : 'ahora mismo, como privado';
-  if (schedule && !cuando){
-    alert('El canal no tiene horarios de publicación válidos. Configúralos en Canales.');
+  if (schedule && !info.next_slot_local){
+    alert('No hay horarios libres que respeten la separación mínima de ' +
+          info.gap_min + ' min. Revisa los horarios en Canales.');
     return;
   }
+  // El candado: publicar en ráfaga hace que YouTube corte la distribución.
+  if (!schedule && !info.can_publish_now){
+    const ir = confirm('No conviene publicar ahora:\n\n' + info.gap_reason +
+      (info.next_slot_local ? `\n\n¿Lo programo para el ${info.next_slot_local}?` : ''));
+    if (ir && info.next_slot_local) return doUpload(qid, true);
+    return;
+  }
+  const cuando = schedule
+    ? `programado para el ${info.next_slot_local} (${info.timezone})`
+    : 'ahora mismo';
   if (!confirm(`Se va a subir a "${info.channel_title}" ${cuando}.\n\n¿Confirmas?`)) return;
 
   await saveQueue(qid);

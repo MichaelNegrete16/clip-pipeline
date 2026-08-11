@@ -16,6 +16,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterator
+from urllib.parse import quote
 
 import requests
 
@@ -219,6 +220,86 @@ def get_live_streams(logins: list[str]) -> dict[str, dict]:
                 "started_at": s.get("started_at"),
             }
     return live
+
+
+# ── DESCARGA DIRECTA DE CLIPS ──────────────────────────────────────────────────
+# yt-dlp rompe su extractor de Twitch cada vez que Twitch toca su GraphQL interno
+# (hoy mismo falla con KeyError('data'), y ni la versión nightly lo arregla). Como el
+# endpoint sí responde bien, pedimos la URL nosotros: dos llamadas y sin depender de
+# que publiquen un parche.
+GQL_URL = "https://gql.twitch.tv/gql"
+GQL_CLIENT_ID = "kimne78kx3ncx6brgo4mv6wki5h1ko"   # client-id público del reproductor web
+CLIP_TOKEN_HASH = "36b89d2507fce29e5ca551df756d27c1cfe079e2609642b4390aa4c35796eb11"
+
+
+def clip_slug(url_or_slug: str) -> str:
+    """Extrae el identificador del clip de una URL de Twitch."""
+    s = (url_or_slug or "").strip().rstrip("/")
+    for marca in ("/clip/", "clips.twitch.tv/"):
+        if marca in s:
+            s = s.split(marca)[-1]
+    return s.split("?")[0].split("/")[-1]
+
+
+def clip_download_url(url_or_slug: str) -> tuple[str, dict]:
+    """URL directa al MP4 del clip, en la mejor calidad disponible.
+
+    Devuelve (url, info) donde info trae quality y frameRate.
+    """
+    slug = clip_slug(url_or_slug)
+    payload = [{
+        "operationName": "VideoAccessToken_Clip",
+        "variables": {"slug": slug},
+        "extensions": {"persistedQuery": {"version": 1, "sha256Hash": CLIP_TOKEN_HASH}},
+    }]
+    resp = requests.post(GQL_URL, json=payload,
+                         headers={"Client-Id": GQL_CLIENT_ID}, timeout=30)
+    if resp.status_code != 200:
+        raise TwitchError(f"GQL respondió {resp.status_code} para el clip {slug}")
+
+    try:
+        clip = resp.json()[0]["data"]["clip"]
+    except (KeyError, IndexError, TypeError, ValueError) as exc:
+        raise TwitchError(f"Respuesta inesperada de GQL para {slug}: {exc}")
+    if not clip:
+        raise TwitchError(f"El clip {slug} no existe o fue borrado")
+
+    calidades = clip.get("videoQualities") or []
+    if not calidades:
+        raise TwitchError(f"El clip {slug} no expone calidades descargables")
+
+    def alto(q: dict) -> int:
+        try:
+            return int(q.get("quality") or 0)
+        except ValueError:
+            return 0
+
+    mejor = max(calidades, key=alto)
+    token = clip.get("playbackAccessToken") or {}
+    if not token.get("signature") or not token.get("value"):
+        raise TwitchError(f"El clip {slug} no devolvió token de reproducción")
+
+    url = (f"{mejor['sourceURL']}?sig={token['signature']}"
+           f"&token={quote(token['value'])}")
+    return url, {"quality": mejor.get("quality"), "fps": mejor.get("frameRate")}
+
+
+def download_clip_file(url_or_slug: str, dest: Path) -> Path:
+    """Descarga el MP4 del clip a `dest`."""
+    url, _ = clip_download_url(url_or_slug)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(dest.suffix + ".part")
+
+    with requests.get(url, stream=True, timeout=120) as r:
+        if r.status_code != 200:
+            raise TwitchError(f"La descarga del clip devolvió {r.status_code}")
+        with tmp.open("wb") as fh:
+            for trozo in r.iter_content(1 << 20):
+                if trozo:
+                    fh.write(trozo)
+
+    tmp.replace(dest)
+    return dest
 
 
 def is_configured() -> bool:

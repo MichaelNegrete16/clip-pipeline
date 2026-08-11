@@ -23,6 +23,7 @@ if hasattr(sys.stdout, "reconfigure"):
 
 import config  # noqa: E402
 import db as db_mod  # noqa: E402
+import twitch_client  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import overlays  # noqa: E402
@@ -44,7 +45,7 @@ def _run(cmd: list[str], what: str) -> None:
 
 
 def download_clip(clip: dict, dest_dir: Path) -> Path:
-    """Baja el clip con yt-dlp. Twitch va por la página del clip; Kick por su HLS."""
+    """Baja el clip. Twitch va por su GQL; Kick por su HLS con yt-dlp."""
     dest_dir.mkdir(parents=True, exist_ok=True)
     source_url = clip.get("clip_page_url") or clip.get("video_url")
     if not source_url:
@@ -53,6 +54,15 @@ def download_clip(clip: dict, dest_dir: Path) -> Path:
     out = dest_dir / f"raw_{clip['id']}.mp4"
     if out.exists():
         return out
+
+    # Twitch: descarga propia. El extractor de yt-dlp se rompe cada vez que Twitch
+    # toca su GraphQL, y esperar el parche deja el pipeline parado. Si nuestra vía
+    # fallara, se cae al camino de yt-dlp de todas formas.
+    if clip.get("platform") == "twitch":
+        try:
+            return twitch_client.download_clip_file(source_url, out)
+        except Exception as exc:  # noqa: BLE001
+            print(f"      descarga directa falló ({exc}); probando con yt-dlp")
 
     cmd = [
         sys.executable, "-m", "yt_dlp",

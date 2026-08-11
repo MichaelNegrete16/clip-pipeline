@@ -9,7 +9,9 @@ uvicorn[standard]==0.52.1
 requests==2.32.3
 
 # ── Render ─────────────────────────────────────────────────────────────────────
-yt-dlp==2026.7.4
+# Sólo se usa para Kick. Twitch va por descarga propia (ingest/twitch_client.py):
+# su extractor de yt-dlp se rompe cada vez que Twitch toca el GraphQL interno.
+yt-dlp>=2026.7.4
 pillow==12.3.0
 
 # ── Transcripción y censura ────────────────────────────────────────────────────

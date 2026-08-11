@@ -602,12 +602,39 @@ def render_status(queue_id: int):
 class UploadReq(BaseModel):
     privacy: str = "private"      # private | unlisted | public
     schedule: bool = False        # programar en el próximo horario del canal
+    force: bool = False           # saltarse el candado anti-ráfaga a propósito
 
 
-def next_publish_slot(profile: dict) -> tuple[str, str] | None:
-    """Próximo horario de publicación del canal, en UTC ISO y en hora local legible.
+def _publish_times(conn, profile_id: int) -> list[datetime]:
+    """Momentos de publicación ya comprometidos por este canal, en UTC.
 
-    YouTube exige publishAt en UTC; la config del canal está en su zona horaria.
+    Incluye lo ya publicado y lo programado a futuro, de shorts y de recopilatorios.
+    """
+    filas = list(conn.execute(
+        """SELECT u.published_at AS t FROM uploads u
+           JOIN profile_queue q ON q.id = u.queue_id
+           WHERE q.profile_id = ? AND u.published_at IS NOT NULL
+           UNION ALL
+           SELECT published_at AS t FROM compilations
+           WHERE profile_id = ? AND published_at IS NOT NULL""",
+        (profile_id, profile_id)))
+
+    salida = []
+    for f in filas:
+        try:
+            dt = datetime.fromisoformat(str(f["t"]).replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        salida.append(dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc))
+    return salida
+
+
+def next_publish_slot(profile: dict, taken: list[datetime] | None = None
+                      ) -> tuple[str, str] | None:
+    """Próximo horario libre de publicación, en UTC ISO y en hora local legible.
+
+    Salta los huecos que quedarían demasiado pegados a otra publicación: publicar en
+    ráfaga desde un canal chico hace que YouTube corte la distribución.
     """
     try:
         times = json.loads(profile["publish_times"]) if profile["publish_times"] else []
@@ -621,9 +648,12 @@ def next_publish_slot(profile: dict) -> tuple[str, str] | None:
     except Exception:  # noqa: BLE001 - zona inválida en config
         tz = ZoneInfo("America/Bogota")
 
+    gap = timedelta(minutes=int(profile["min_publish_gap_min"] or 45))
+    ocupados = taken or []
     now = datetime.now(tz)
-    slots: list[datetime] = []
-    for day_offset in (0, 1):
+
+    candidatos: list[datetime] = []
+    for day_offset in range(0, 8):        # hasta una semana por delante
         for t in times:
             try:
                 hh, mm = (int(x) for x in str(t).split(":")[:2])
@@ -631,14 +661,41 @@ def next_publish_slot(profile: dict) -> tuple[str, str] | None:
                 continue
             cand = (now + timedelta(days=day_offset)).replace(
                 hour=hh, minute=mm, second=0, microsecond=0)
-            if cand > now + timedelta(minutes=5):   # margen: YouTube rechaza el pasado
-                slots.append(cand)
-    if not slots:
-        return None
+            if cand > now + timedelta(minutes=5):   # YouTube rechaza el pasado
+                candidatos.append(cand)
 
-    nxt = min(slots)
-    return (nxt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            nxt.strftime("%Y-%m-%d %H:%M"))
+    for cand in sorted(candidatos):
+        u = cand.astimezone(timezone.utc)
+        if all(abs(u - o) >= gap for o in ocupados):
+            return (u.strftime("%Y-%m-%dT%H:%M:%SZ"), cand.strftime("%Y-%m-%d %H:%M"))
+    return None
+
+
+def _gap_ok(profile: dict, taken: list[datetime],
+            publish_at: str | None) -> tuple[bool, str | None]:
+    """¿Esta publicación queda suficientemente separada de las demás?
+
+    El candado: publicar varios videos casi a la vez desde un canal pequeño hace que
+    YouTube limite su distribución. De los 6 primeros que subimos, los 3 que salieron
+    con segundos de diferencia se quedaron en CERO impresiones mientras sus hermanos
+    pasaban de mil vistas. La cuenta que importa es la separación entre PUBLICACIONES,
+    no entre subidas: un video programado se sube ya pero se publica después.
+    """
+    gap = timedelta(minutes=int(profile.get("min_publish_gap_min") or 45))
+    if publish_at:
+        momento = datetime.fromisoformat(publish_at.replace("Z", "+00:00"))
+    else:
+        momento = datetime.now(timezone.utc)
+
+    for otro in taken:
+        diff = abs(momento - otro)
+        if diff < gap:
+            faltan = int((gap - diff).total_seconds() // 60) + 1
+            return False, (
+                f"Quedaría a {int(diff.total_seconds() // 60)} min de otra publicación "
+                f"y el mínimo del canal es {int(gap.total_seconds() // 60)} min. "
+                f"Espera {faltan} min o prográmalo en el próximo horario.")
+    return True, None
 
 
 @app.get("/api/queue/{queue_id}/upload")
@@ -648,6 +705,7 @@ def upload_preview(queue_id: int):
     try:
         row = conn.execute(
             """SELECT q.*, p.publish_times, p.timezone, p.uploads_per_day,
+                      p.min_publish_gap_min,
                       y.refresh_token IS NOT NULL AS connected, y.channel_title
                FROM profile_queue q JOIN profiles p ON p.id = q.profile_id
                LEFT JOIN youtube_accounts y ON y.profile_id = q.profile_id
@@ -655,11 +713,16 @@ def upload_preview(queue_id: int):
         if not row:
             raise HTTPException(404, "No existe ese elemento en la cola")
 
-        slot = next_publish_slot(dict(row))
+        ocupados = _publish_times(conn, row["profile_id"])
+        slot = next_publish_slot(dict(row), ocupados)
+        listo, motivo = _gap_ok(dict(row), ocupados, None)
+
         return {"connected": bool(row["connected"]), "channel_title": row["channel_title"],
                 "next_slot_utc": slot[0] if slot else None,
                 "next_slot_local": slot[1] if slot else None,
-                "timezone": row["timezone"]}
+                "timezone": row["timezone"],
+                "gap_min": row["min_publish_gap_min"],
+                "can_publish_now": listo, "gap_reason": motivo}
     finally:
         conn.close()
 
@@ -669,7 +732,8 @@ def upload_to_youtube(queue_id: int, body: UploadReq):
     conn = get_conn()
     try:
         row = conn.execute(
-            """SELECT q.*, p.publish_times, p.timezone, y.refresh_token, y.yt_channel_id
+            """SELECT q.*, p.publish_times, p.timezone, p.min_publish_gap_min,
+                      y.refresh_token, y.yt_channel_id
                FROM profile_queue q JOIN profiles p ON p.id = q.profile_id
                LEFT JOIN youtube_accounts y ON y.profile_id = q.profile_id
                WHERE q.id = ?""", (queue_id,)).fetchone()
@@ -688,12 +752,21 @@ def upload_to_youtube(queue_id: int, body: UploadReq):
         if not path.exists():
             raise HTTPException(400, f"No se encuentra el archivo renderizado: {path.name}")
 
+        ocupados = _publish_times(conn, row["profile_id"])
+
         publish_at = None
         if body.schedule:
-            slot = next_publish_slot(dict(row))
+            slot = next_publish_slot(dict(row), ocupados)
             if not slot:
-                raise HTTPException(400, "El canal no tiene horarios de publicación válidos")
+                raise HTTPException(400, "No hay horarios libres en la próxima semana "
+                                         "que respeten la separación mínima del canal")
             publish_at = slot[0]
+
+        # El candado anti-ráfaga. `force` existe para casos puntuales, pero por defecto
+        # bloquea: es el error que dejó 3 de los 6 primeros videos sin una sola vista.
+        listo, motivo = _gap_ok(dict(row), ocupados, publish_at)
+        if not listo and not body.force:
+            raise HTTPException(409, motivo)
 
         try:
             tokens = yt.refresh_access_token(row["refresh_token"])
@@ -711,7 +784,7 @@ def upload_to_youtube(queue_id: int, body: UploadReq):
 
         conn.execute(
             "INSERT INTO uploads (queue_id, yt_video_id, title, tags, privacy, "
-            "published_at, kind) VALUES (?,?,?,?,?,?,?)",
+            "published_at, uploaded_at, kind) VALUES (?,?,?,?,?,?,datetime('now'),?)",
             (queue_id, result["id"], result["title"], row["tags"], result["privacy"],
              publish_at or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
              row["kind"] or "short"))
