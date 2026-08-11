@@ -97,6 +97,10 @@ class ProfilePatch(BaseModel):
     tags: list[str] | None = None
     censor_enabled: bool | None = None
     cta_enabled: bool | None = None           # botones de suscribirse/compartir
+    category_mix: dict[str, float] | None = None      # {"Gaming":2,"Charla":1}
+    category_exclude: list[str] | None = None
+    min_publish_gap_min: int | None = None
+    min_fun_score: float | None = None
     output_format: str | None = None          # short | video | both
     vertical_style: str | None = None         # blur | crop
     compilation_clips: int | None = None
@@ -272,20 +276,19 @@ def decide(clip_id: int, body: Decision):
 
 
 # ── PROFILES (canales de YouTube destino) ──────────────────────────────────────
-JSON_FIELDS = ("publish_times", "tags", "categories")
+JSON_FIELDS = ("publish_times", "tags", "categories", "category_mix", "category_exclude")
 
 
 def _profile_row(conn, row) -> dict:
     """Serializa un profile con sus fuentes, blacklist y estado de la cola."""
     p = dict(row)
     for f in JSON_FIELDS:
-        if p.get(f):
-            try:
-                p[f] = json.loads(p[f])
-            except (json.JSONDecodeError, TypeError):
-                p[f] = []
-        else:
-            p[f] = []
+        # category_mix es un objeto de pesos; el resto son listas.
+        vacio: dict | list = {} if f == "category_mix" else []
+        try:
+            p[f] = json.loads(p[f]) if p.get(f) else vacio
+        except (json.JSONDecodeError, TypeError):
+            p[f] = vacio
 
     p["sources"] = [dict(r) for r in conn.execute(
         "SELECT s.id, s.slug, s.platform, ps.weight FROM profile_sources ps "
@@ -344,7 +347,7 @@ def patch_profile(profile_id: int, body: ProfilePatch):
         raise HTTPException(400, "Nada que actualizar")
 
     for f in JSON_FIELDS:
-        if isinstance(updates.get(f), list):
+        if isinstance(updates.get(f), (list, dict)):
             updates[f] = json.dumps(updates[f], ensure_ascii=False)
     for f in ("enabled", "require_approval", "censor_enabled", "cta_enabled"):
         if f in updates:
@@ -457,34 +460,75 @@ def propose_today(profile_id: int, min_age_hours: int = 12, window_days: int = 7
         fun.refresh(conn)
 
         marks = ",".join("?" * len(linked))
+        base_params = (*linked, prof["min_views"], prof["min_duration_s"],
+                       prof["max_duration_s"], f"-{int(window_days)} days",
+                       f"-{int(min_age_hours)} hours", profile_id)
+
         # ROW_NUMBER por racimo: si 15 personas clipearon el mismo momento, se publica
         # UNO solo (el mejor del racimo) en vez de repetir el chiste 15 veces.
         # Los clips sin racimo se tratan cada uno como su propio grupo.
-        rows = conn.execute(
-            f"""WITH ranked AS (
-                    SELECT c.*, s.slug AS source_slug, s.platform,
-                           ROW_NUMBER() OVER (
-                               PARTITION BY COALESCE(c.cluster_key, 'solo:' || c.id)
-                               ORDER BY c.views DESC, c.duration_s ASC
-                           ) AS rn
-                    FROM clip_candidates c
-                    JOIN sources s ON s.id = c.source_id
-                    WHERE c.source_id IN ({marks})
-                      AND c.views >= ?
-                      AND c.duration_s BETWEEN ? AND ?
-                      AND c.created_at >= datetime('now', ?)
-                      AND c.created_at <= datetime('now', ?)
-                      AND c.is_mature = 0
-                      AND c.id NOT IN (
-                          SELECT clip_id FROM profile_queue WHERE profile_id = ?)
-                )
-                SELECT * FROM ranked WHERE rn = 1
-                ORDER BY fun_score DESC, views DESC
-                LIMIT ?""",
-            (*linked, prof["min_views"], prof["min_duration_s"], prof["max_duration_s"],
-             f"-{int(window_days)} days", f"-{int(min_age_hours)} hours",
-             profile_id, prof["uploads_per_day"]),
-        ).fetchall()
+        BASE = f"""
+            WITH ranked AS (
+                SELECT c.*, s.slug AS source_slug, s.platform,
+                       COALESCE(c.category_group, 'Otros') AS familia,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY COALESCE(c.cluster_key, 'solo:' || c.id)
+                           ORDER BY c.views DESC, c.duration_s ASC
+                       ) AS rn
+                FROM clip_candidates c
+                JOIN sources s ON s.id = c.source_id
+                WHERE c.source_id IN ({marks})
+                  AND c.views >= ?
+                  AND c.duration_s BETWEEN ? AND ?
+                  AND c.created_at >= datetime('now', ?)
+                  AND c.created_at <= datetime('now', ?)
+                  AND c.is_mature = 0
+                  AND c.id NOT IN (
+                      SELECT clip_id FROM profile_queue WHERE profile_id = ?)
+            )
+            SELECT * FROM ranked WHERE rn = 1"""
+
+        def _json(campo, defecto):
+            try:
+                return json.loads(prof[campo]) if prof[campo] else defecto
+            except (json.JSONDecodeError, TypeError):
+                return defecto
+
+        excluidas = _json("category_exclude", ["Casino", "Subido de tono"])
+        mezcla = _json("category_mix", {})
+        cupo = prof["uploads_per_day"]
+
+        filtro_excl = ""
+        if excluidas:
+            filtro_excl = f" AND familia NOT IN ({','.join('?' * len(excluidas))})"
+
+        rows = []
+        if mezcla:
+            # Con mezcla configurada se elige lo mejor DE CADA familia por separado.
+            # Con ranking global, la familia más numerosa se come todo el cupo: había
+            # 191 clips de Gaming disponibles y sólo salían 3.
+            piso = float(prof["min_fun_score"] or 0)
+            for familia, n in categories.split_slots(mezcla, cupo).items():
+                # El piso evita que una familia flaca rellene su hueco con cualquier
+                # cosa. Si no llega, ese cupo se reparte abajo entre lo mejor que haya.
+                rows += conn.execute(
+                    BASE + " AND familia = ? AND fun_score >= ?"
+                           " ORDER BY fun_score DESC, views DESC LIMIT ?",
+                    (*base_params, familia, piso, n)).fetchall()
+
+            # Cupos que quedaron sin cubrir: se completan con lo mejor que quede,
+            # respetando el mismo piso de calidad.
+            if len(rows) < cupo:
+                ya = {r["id"] for r in rows}
+                extra = conn.execute(
+                    BASE + filtro_excl + " AND fun_score >= ?"
+                           " ORDER BY fun_score DESC, views DESC LIMIT ?",
+                    (*base_params, *excluidas, piso, cupo * 4)).fetchall()
+                rows += [r for r in extra if r["id"] not in ya][:cupo - len(rows)]
+        else:
+            rows = conn.execute(
+                BASE + filtro_excl + " ORDER BY fun_score DESC, views DESC LIMIT ?",
+                (*base_params, *excluidas, cupo)).fetchall()
 
         tpl = prof["title_template"]
         ptags = json.loads(prof["tags"]) if prof["tags"] else []

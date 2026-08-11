@@ -267,6 +267,15 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     # seguidos desde un canal chico parece automatizado y YouTube corta su
     # distribución: pasó con 3 de los 6 primeros, subidos con 21 segundos de diferencia.
     ("profiles", "min_publish_gap_min", "INTEGER NOT NULL DEFAULT 45"),
+    # Mezcla de familias deseada, como pesos: {"Gaming":2,"Charla":1} = 2 de cada 3.
+    # Sin esto la selección va por ranking global y una familia se come el cupo.
+    ("profiles", "category_mix", "TEXT"),
+    # Piso de gracia para los cupos por categoría. Sin él, una familia flaca mete
+    # cualquier cosa con tal de llenar su hueco: con Deportes en 18 clips disponibles
+    # entró uno de gracia 15 que sólo había clipeado una persona.
+    ("profiles", "min_fun_score", "REAL NOT NULL DEFAULT 45"),
+    # Familias que nunca se publican, pase lo que pase con su puntaje.
+    ("profiles", "category_exclude", "TEXT DEFAULT '[\"Casino\",\"Subido de tono\"]'"),
     # Momento real de la llamada a la API, distinto de published_at cuando se programa.
     ("uploads", "uploaded_at", "TEXT"),
     # Título/descripción/tags propuestos por el bot, editables antes de subir.

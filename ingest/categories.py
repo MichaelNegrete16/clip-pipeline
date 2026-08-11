@@ -138,6 +138,30 @@ def refresh_groups(conn: sqlite3.Connection) -> dict:
     return {"categorias": len(mapeo), "por_grupo": resumen}
 
 
+def split_slots(mix: dict[str, float], total: int) -> dict[str, int]:
+    """Reparte `total` cupos entre las familias según sus pesos.
+
+    Usa el método de restos mayores: reparte la parte entera y los cupos sobrantes van
+    a quien tenga la fracción más grande. Con 2 cupos y pesos 2:1 sale {2:1, 1:1} en
+    vez de dejar una familia en cero, que es lo que pasaría redondeando a secas.
+    """
+    activos = {k: float(v) for k, v in (mix or {}).items() if float(v or 0) > 0}
+    if not activos or total <= 0:
+        return {}
+
+    suma = sum(activos.values())
+    exactos = {k: total * v / suma for k, v in activos.items()}
+    cupos = {k: int(v) for k, v in exactos.items()}
+
+    faltan = total - sum(cupos.values())
+    if faltan > 0:
+        restos = sorted(activos, key=lambda k: (exactos[k] - cupos[k], activos[k]),
+                        reverse=True)
+        for k in restos[:faltan]:
+            cupos[k] += 1
+    return {k: v for k, v in cupos.items() if v > 0}
+
+
 def stats(conn: sqlite3.Connection, *, days: int = 30, min_views: int = 300,
           source_ids: list[int] | None = None) -> list[dict]:
     """Por familia: cuánto produce y qué streamers mandan en ella.

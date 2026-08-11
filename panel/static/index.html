@@ -1062,7 +1062,37 @@ function renderProfile(p){
     </div>
 
     <div style="margin-top:18px">
-      <div style="font-weight:600;margin-bottom:8px">Fuentes que alimentan este canal</div>
+      <div class="card-title" style="margin-bottom:4px">Mezcla de categorías</div>
+      <div class="card-sub">Cuántos de cada familia quieres por tanda. Sin mezcla manda
+        el ranking global y una sola familia se come el cupo: había 191 clips de Gaming
+        disponibles y sólo salían 3. Deja todo en 0 para volver al ranking puro.</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px">
+        ${['Gaming','Charla','Deportes','Eventos','Música','Creativo'].map(f => `
+          <label class="cfg">${f}
+            <input type="number" min="0" max="9" step="1"
+                   id="p${p.id}_mix_${f.replace(/[^A-Za-z]/g,'')}"
+                   value="${(p.category_mix || {})[f] || 0}"></label>`).join('')}
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));
+                  gap:10px;margin-top:12px">
+        <label class="cfg">Gracia mínima para publicar
+          <input type="number" id="p${p.id}_minfun" value="${p.min_fun_score ?? 45}"
+                 min="0" max="100" step="5">
+          <small>Si una familia no tiene nada por encima de este puntaje, su cupo pasa
+            al mejor clip que haya en vez de rellenar con algo flojo.</small></label>
+        <label class="cfg">Separación mínima entre publicaciones (min)
+          <input type="number" id="p${p.id}_gap" value="${p.min_publish_gap_min ?? 45}"
+                 min="0" max="720" step="15">
+          <small>Publicar en ráfaga hace que YouTube corte la distribución.</small></label>
+      </div>
+      <div class="msg" style="background:var(--s2);color:var(--fg-3)">
+        Excluidas siempre: <b>${(p.category_exclude || []).map(x=>esc(x)).join(', ') || 'ninguna'}</b>
+        — YouTube limita anunciantes en esas familias.
+      </div>
+    </div>
+
+    <div style="margin-top:22px">
+      <div class="card-title" style="margin-bottom:8px">Fuentes que alimentan este canal</div>
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:8px">
         ${srcRows}</div>
     </div>
@@ -1122,6 +1152,12 @@ async function saveProfile(id){
     cta_enabled: $('#p'+id+'_cta').checked,
     output_format: v('fmt'),
     vertical_style: v('vstyle'),
+    category_mix: Object.fromEntries(
+      ['Gaming','Charla','Deportes','Eventos','Música','Creativo']
+        .map(f => [f, +($('#p'+id+'_mix_'+f.replace(/[^A-Za-z]/g,''))?.value || 0)])
+        .filter(([, n]) => n > 0)),
+    min_fun_score: +v('minfun'),
+    min_publish_gap_min: +v('gap'),
     compilation_clips: +v('compn'),
     compilation_day: v('compd'),
   };
