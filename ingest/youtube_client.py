@@ -32,7 +32,33 @@ SCOPES = [
     "https://www.googleapis.com/auth/youtube.upload",      # subir videos
     "https://www.googleapis.com/auth/youtube.readonly",    # leer datos del canal
     "https://www.googleapis.com/auth/yt-analytics.readonly",  # métricas y retención
+    # Permite editar nombre, descripción y palabras clave del canal. La foto de perfil
+    # NO se puede cambiar por API con ningún permiso: eso es sólo desde YouTube Studio.
+    "https://www.googleapis.com/auth/youtube",
 ]
+
+
+def update_channel(access_token: str, channel_id: str, *, title: str | None = None,
+                   description: str | None = None, keywords: str | None = None,
+                   country: str = "CO", language: str = "es") -> dict:
+    """Actualiza la identidad textual del canal. Requiere el scope `youtube`."""
+    branding: dict = {"channel": {"country": country, "defaultLanguage": language}}
+    if title:
+        branding["channel"]["title"] = title
+    if description:
+        branding["channel"]["description"] = description[:1000]
+    if keywords:
+        branding["channel"]["keywords"] = keywords
+
+    resp = requests.put(
+        f"{API}/channels", params={"part": "brandingSettings"},
+        headers={"Authorization": f"Bearer {access_token}",
+                 "Content-Type": "application/json"},
+        json={"id": channel_id, "brandingSettings": branding}, timeout=40)
+    if resp.status_code != 200:
+        raise YouTubeError(
+            f"No se pudo actualizar el canal ({resp.status_code}): {resp.text[:250]}")
+    return resp.json()
 
 UPLOAD_QUOTA_COST = 1600
 DAILY_QUOTA = 10_000

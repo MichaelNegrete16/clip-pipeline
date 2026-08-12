@@ -2,7 +2,11 @@
 data/*.db
 data/*.db-journal
 media/
+# El arte del canal sí se versiona: es identidad, no temporal.
+!media/canal/
+!media/canal/**
 __pycache__/
 *.pyc
 .venv/
 node_modules/
+media/canal/preview.png
