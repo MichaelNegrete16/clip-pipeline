@@ -102,11 +102,20 @@ def get_channel(slug: str) -> dict:
     if not items:
         raise TwitchError(f"El canal '{slug}' no existe en Twitch")
     u = items[0]
+    # /users no trae el idioma; /channels sí, en broadcaster_language.
+    idioma = None
+    try:
+        canal = _api("channels", {"broadcaster_id": u["id"]})
+        idioma = ((canal.get("data") or [{}])[0].get("broadcaster_language") or "").lower() or None
+    except TwitchError:
+        pass
+
     return {
         "id": u["id"],
         "user": {"username": u.get("display_name") or u.get("login")},
         "profile_picture": u.get("profile_image_url"),
         "description": u.get("description"),
+        "language": idioma,
     }
 
 

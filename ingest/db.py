@@ -274,6 +274,13 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     # cualquier cosa con tal de llenar su hueco: con Deportes en 18 clips disponibles
     # entró uno de gracia 15 que sólo había clipeado una persona.
     ("profiles", "min_fun_score", "REAL NOT NULL DEFAULT 45"),
+    # Idiomas de los que este canal toma clips. Los que no sean español pasan por
+    # traducción y subtítulos al renderizar.
+    ("profiles", "languages", "TEXT DEFAULT '[\"es\"]'"),
+    # Idioma de la fuente. Twitch lo da en broadcaster_language; Kick sólo cuando el
+    # canal está en vivo, así que ahí queda como respaldo lo que detecte Whisper.
+    ("sources", "language", "TEXT"),
+    ("sources", "language_origin", "TEXT"),   # api | detectado | manual
     # Familias que nunca se publican, pase lo que pase con su puntaje.
     ("profiles", "category_exclude", "TEXT DEFAULT '[\"Casino\",\"Subido de tono\"]'"),
     # Momento real de la llamada a la API, distinto de published_at cuando se programa.

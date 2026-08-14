@@ -47,6 +47,21 @@ def _get(url: str, *, retries: int = 3, timeout: int = 30) -> dict:
     raise KickError(f"GET {url} falló tras {retries} intentos: {last}")
 
 
+# Kick devuelve el idioma en texto y sólo cuando el canal está en vivo.
+IDIOMAS_KICK = {
+    "spanish": "es", "english": "en", "portuguese": "pt", "french": "fr",
+    "german": "de", "italian": "it", "turkish": "tr", "polish": "pl",
+    "arabic": "ar", "russian": "ru", "japanese": "ja", "korean": "ko",
+}
+
+
+def language_of(payload: dict) -> str | None:
+    """Idioma del canal, si Kick lo está exponiendo en ese momento."""
+    bruto = ((payload.get("livestream") or {}).get("language")
+             or payload.get("language") or "")
+    return IDIOMAS_KICK.get(str(bruto).strip().lower())
+
+
 def get_channel(slug: str) -> dict:
     return _get(f"{BASE}/channels/{slug}")
 

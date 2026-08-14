@@ -85,6 +85,11 @@ def ingest_source(conn: sqlite3.Connection, platform: str, slug: str,
     user = info.get("user") or {}
     display = user.get("username") or slug
 
+    # Twitch da el idioma directamente; Kick sólo mientras el canal está en vivo.
+    # Si no se sabe, queda vacío y lo rellena Whisper al renderizar el primer clip.
+    idioma = (info.get("language") if platform == "twitch"
+              else kick_client.language_of(info))
+
     pages_by_window = {"all": pages_all, "month": pages_month,
                        "week": pages_month, "day": pages_month}
     wins = windows or ("all", "month", "week")
@@ -102,6 +107,12 @@ def ingest_source(conn: sqlite3.Connection, platform: str, slug: str,
             return {"ok": False, "slug": slug, "platform": platform, "error": str(exc)}
 
     source_id = db_mod.upsert_source(conn, platform, slug, display)
+    if idioma:
+        # No se pisa un idioma puesto a mano: esa corrección vale más que la API.
+        conn.execute(
+            "UPDATE sources SET language = ?, language_origin = 'api' WHERE id = ? "
+            "AND (language_origin IS NULL OR language_origin <> 'manual')",
+            (idioma, source_id))
 
     for c in clips.values():
         views = c.get("views") or c.get("view_count") or 0
@@ -161,7 +172,8 @@ def source_stats(conn: sqlite3.Connection, source_id: int,
         return {"id": source_id, "slug": src["slug"], "platform": src["platform"],
                 "display_name": src["display_name"], "total_clips": 0, "peak": 0,
                 "month_top": 0, "per_month": {t: 0 for t in THRESHOLDS},
-                "enabled": bool(src["enabled"]), "has_consent": bool(src["has_consent"])}
+                "enabled": bool(src["enabled"]), "has_consent": bool(src["has_consent"]),
+                "language": src["language"], "language_origin": src["language_origin"]}
 
     cutoff = datetime.now(timezone.utc) - timedelta(days=30)
     usable = [r for r in rows if min_d <= r["duration_s"] <= max_d]
@@ -182,6 +194,8 @@ def source_stats(conn: sqlite3.Connection, source_id: int,
         "display_name": src["display_name"],
         "enabled": bool(src["enabled"]),
         "has_consent": bool(src["has_consent"]),
+        "language": src["language"],
+        "language_origin": src["language_origin"],
         "total_clips": len(rows),
         "usable_clips": len(usable),
         "peak": max((r["views"] for r in rows), default=0),

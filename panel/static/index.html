@@ -306,7 +306,7 @@
     <div class="card">
       <table>
         <thead><tr>
-          <th>Canal</th><th>Clips</th><th>Pico histórico</th><th>Top del mes</th>
+          <th>Canal</th><th>Idioma</th><th>Clips</th><th>Pico histórico</th><th>Top del mes</th>
           <th>≥1k/mes</th><th>≥300/mes</th><th>≥100/mes</th><th>≥50/mes</th>
           <th>Vid/día</th><th>Permiso</th><th></th>
         </tr></thead>
@@ -490,6 +490,12 @@ async function loadSources(){
   const rows = d.sources.map(s => `
     <tr class="${s.enabled ? '' : 'off'}">
       <td><b>${s.slug}</b> <span class="pill">${s.platform}</span></td>
+      <td><select onchange="patchSrc(${s.id},{language:this.value})"
+             title="${s.language_origin ? 'origen: '+s.language_origin : 'sin determinar'}"
+             style="padding:3px 6px;font-size:12px">
+        ${['','es','en','pt','fr','de','it'].map(l =>
+          `<option value="${l}" ${s.language===l||(!s.language&&!l)?'selected':''}>${l||'—'}</option>`).join('')}
+      </select>${s.language_origin==='detectado' ? ' <span class="pill">oído</span>' : ''}</td>
       <td>${fmt(s.total_clips)}</td>
       <td>${fmt(s.peak)}</td>
       <td>${fmt(s.month_top)}</td>
@@ -506,7 +512,7 @@ async function loadSources(){
         <button class="ghost" onclick="delSrc(${s.id},'${s.slug}')">Borrar</button>
       </td>
     </tr>`).join('');
-  $('#srcRows').innerHTML = rows || '<tr><td colspan="11" class="empty">Sin fuentes todavía.</td></tr>';
+  $('#srcRows').innerHTML = rows || '<tr><td colspan="12" class="empty">Sin fuentes todavía.</td></tr>';
 
   $('#fSrc').innerHTML = '<option value="">Todas</option>' +
     d.sources.map(s => `<option value="${s.id}">${s.slug}</option>`).join('');
@@ -715,9 +721,11 @@ async function loadToday(){
   $('#navPend').textContent = pend || '';
 }
 
-const isRunning = s => ['pending','downloading','rendering'].includes(s);
+const isRunning = s => ['pending','downloading','transcribing',
+                        'translating','rendering'].includes(s);
 
 const RENDER_LABEL = {pending:'En cola…', downloading:'Descargando el clip…',
+  transcribing:'Transcribiendo el audio…', translating:'Traduciendo y armando subtítulos…',
   rendering:'Renderizando 9:16…', done:'Listo', failed:'Falló'};
 
 function renderTodayItem(it){
@@ -1062,6 +1070,17 @@ function renderProfile(p){
     </div>
 
     <div style="margin-top:18px">
+      <div class="card-title" style="margin-bottom:4px">Idiomas de las fuentes</div>
+      <div class="card-sub">De qué idiomas toma clips este canal. Lo que no sea español
+        se transcribe, se traduce y sale con subtítulos quemados en el video.</div>
+      <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:22px">
+        ${[['es','Español'],['en','Inglés'],['pt','Portugués']].map(([c,n]) => `
+          <label style="display:flex;gap:7px;align-items:center;font-size:13px">
+            <input type="checkbox" id="p${p.id}_lang_${c}"
+                   ${(p.languages || ['es']).includes(c) ? 'checked' : ''}> ${n}
+            ${c !== 'es' ? '<span class="pill">se traduce</span>' : ''}</label>`).join('')}
+      </div>
+
       <div class="card-title" style="margin-bottom:4px">Mezcla de categorías</div>
       <div class="card-sub">Cuántos de cada familia quieres por tanda. Sin mezcla manda
         el ranking global y una sola familia se come el cupo: había 191 clips de Gaming
@@ -1156,6 +1175,7 @@ async function saveProfile(id){
       ['Gaming','Charla','Deportes','Eventos','Música','Creativo']
         .map(f => [f, +($('#p'+id+'_mix_'+f.replace(/[^A-Za-z]/g,''))?.value || 0)])
         .filter(([, n]) => n > 0)),
+    languages: ['es','en','pt'].filter(c => $('#p'+id+'_lang_'+c)?.checked),
     min_fun_score: +v('minfun'),
     min_publish_gap_min: +v('gap'),
     compilation_clips: +v('compn'),

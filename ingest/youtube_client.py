@@ -6,8 +6,16 @@ SOBRE SHORTS: no existe un endpoint aparte. Se sube todo por `videos.insert` y Y
 clasifica como Short lo que sea vertical (9:16 o cuadrado) y dure <= 3 minutos. El
 formato se decide al renderizar, no al subir.
 
-CUOTA: 10.000 unidades/día por proyecto de Google Cloud. `videos.insert` cuesta 1.600,
-o sea 6 subidas diarias en total sumando TODOS los canales del mismo proyecto.
+LÍMITES (medidos, no supuestos):
+
+  - La cuota de la API es de 10.000 unidades/día por proyecto y `videos.insert` figura
+    en 1.600, lo que daría 6 subidas. En la práctica se subieron 10 en un día sin que
+    la cuota se agotara, así que ese cálculo NO es el techo real.
+  - El techo que sí aparece es `uploadLimitExceeded`: un límite POR CANAL que YouTube
+    aplica a cuentas pequeñas o nuevas, independiente de la cuota de API. No está
+    documentado y sube conforme el canal gana antigüedad y reputación.
+
+O sea: el freno práctico es el canal, no el proyecto.
 """
 
 from __future__ import annotations
@@ -243,12 +251,21 @@ def video_metrics(access_token: str, channel_id: str, start_date: str, end_date:
     return [dict(zip(cols, row)) for row in data.get("rows", [])]
 
 
-def quota_budget(uploads_per_day: int) -> dict:
+def quota_budget(uploads_per_day: int, subidas_hoy: int = 0) -> dict:
+    """Estado de los dos límites que existen.
+
+    `max_uploads` es orientativo: la cuota teórica daría 6, pero se han subido 10 en
+    un día sin agotarla. El que corta de verdad es el límite por canal, que no se
+    puede consultar — sólo se descubre cuando YouTube devuelve uploadLimitExceeded.
+    """
     used = uploads_per_day * UPLOAD_QUOTA_COST
     return {
         "cost_per_upload": UPLOAD_QUOTA_COST,
         "daily_quota": DAILY_QUOTA,
         "used": used,
+        "uploaded_today": subidas_hoy,
         "max_uploads": DAILY_QUOTA // UPLOAD_QUOTA_COST,
         "fits": used <= DAILY_QUOTA,
+        "nota": ("El límite real es por canal (uploadLimitExceeded), no la cuota del "
+                 "proyecto: se han subido 10 en un día sin agotar las unidades."),
     }

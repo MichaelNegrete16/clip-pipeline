@@ -26,7 +26,8 @@ import db as db_mod  # noqa: E402
 import twitch_client  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import overlays  # noqa: E402
+import overlays   # noqa: E402
+import subtitles  # noqa: E402
 
 MEDIA = ROOT / "media"
 SHORT_W, SHORT_H = 1080, 1920      # 9:16 vertical
@@ -38,10 +39,17 @@ class RenderError(RuntimeError):
 
 
 def _run(cmd: list[str], what: str) -> None:
-    proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
+                          errors="replace")
     if proc.returncode != 0:
-        tail = (proc.stderr or "").strip().splitlines()[-6:]
-        raise RenderError(f"{what} falló:\n  " + "\n  ".join(tail))
+        lineas = (proc.stderr or "").strip().splitlines()
+        # ffmpeg imprime su banner de versiones antes de fallar; quedarse con las
+        # últimas líneas a secas deja un error que no dice nada.
+        ruido = ("ffmpeg version", "built with", "configuration:", "libav", "libsw",
+                 "libpost", "  Metadata:", "Input #", "Stream #", "Duration:")
+        utiles = [l for l in lineas
+                  if l.strip() and not any(l.lstrip().startswith(r) for r in ruido)]
+        raise RenderError(f"{what} falló:\n  " + "\n  ".join((utiles or lineas)[-6:]))
 
 
 def download_clip(clip: dict, dest_dir: Path) -> Path:
@@ -137,7 +145,8 @@ def render_short(src: Path, out: Path, *, style: str = "blur",
                  watermark: Path | None = None, wm_scale: float = 0.18,
                  wm_margin: int = 42, wm_opacity: float = 0.85,
                  hook: str | None = None, cta: bool = True,
-                 cta_from: float = 1.5, audio_graph: str | None = None) -> Path:
+                 cta_from: float = 1.5, audio_graph: str | None = None,
+                 subs: Path | None = None) -> Path:
     """Convierte a Short vertical 1080x1920 con marca de agua, enganche y botones.
 
     Los overlays se generan como PNG del tamaño exacto del lienzo, así que se pegan en
@@ -147,7 +156,14 @@ def render_short(src: Path, out: Path, *, style: str = "blur",
     out.parent.mkdir(parents=True, exist_ok=True)
 
     cmd = [config.ffmpeg(), "-y", "-i", str(src)]
-    parts = [f"[0:v]{_vertical_filter(style)}[base]"]
+
+    # Los subtítulos se queman sobre el video ya vertical, antes de los overlays:
+    # así el texto queda debajo del enganche y encima de los botones.
+    base_filter = _vertical_filter(style)
+    if subs and Path(subs).exists():
+        base_filter += "," + subtitles.filtro_ffmpeg(Path(subs))
+
+    parts = [f"[0:v]{base_filter}[base]"]
     last, idx = "base", 1
 
     if watermark and Path(watermark).exists():
@@ -159,14 +175,19 @@ def render_short(src: Path, out: Path, *, style: str = "blur",
         parts.append(f"[{last}][wm]overlay=W-w-{wm_margin}:{wm_margin}[v{idx}]")
         last, idx = f"v{idx}", idx + 1
 
-    hook_png = overlays.make_hook(hook) if hook else None
+    # Nombre único por salida: con dos renders en paralelo, ambos escribían el mismo
+    # hook.png y uno lo reescribía mientras el otro lo leía, reventando el render con
+    # "Invalid data found when processing input".
+    marca = out.stem
+
+    hook_png = overlays.make_hook(hook, overlays.TMP / f"hook_{marca}.png") if hook else None
     if hook_png:
         cmd += ["-i", str(hook_png)]
         parts.append(f"[{last}][{idx}:v]overlay=0:0[v{idx}]")
         last, idx = f"v{idx}", idx + 1
 
     if cta:
-        cmd += ["-i", str(overlays.make_cta())]
+        cmd += ["-i", str(overlays.make_cta(overlays.TMP / f"cta_{marca}.png"))]
         # enable: los botones entran después del arranque, no desde el frame 0.
         parts.append(f"[{last}][{idx}:v]overlay=0:0:enable='gte(t,{cta_from})'[v{idx}]")
         last, idx = f"v{idx}", idx + 1
@@ -180,7 +201,7 @@ def render_short(src: Path, out: Path, *, style: str = "blur",
         amap = ["-map", "[aout]"] if audio_graph else ["-map", "0:a?"]
         cmd += ["-filter_complex", ";".join(parts), "-map", f"[{last}]", *amap]
     else:
-        cmd += ["-vf", _vertical_filter(style), "-map", "0:v", "-map", "0:a?"]
+        cmd += ["-vf", base_filter, "-map", "0:v", "-map", "0:a?"]
 
     cmd += [
         "-c:v", "libx264", "-preset", "medium", "-crf", "20",
@@ -191,6 +212,14 @@ def render_short(src: Path, out: Path, *, style: str = "blur",
         str(out),
     ]
     _run(cmd, "Render vertical")
+
+    # Los overlays sólo servían para este render; si no, se acumulan uno por clip.
+    for temporal in (hook_png, overlays.TMP / f"cta_{marca}.png"):
+        try:
+            if temporal and Path(temporal).exists():
+                Path(temporal).unlink()
+        except OSError:
+            pass
     return out
 
 

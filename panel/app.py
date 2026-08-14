@@ -29,6 +29,7 @@ import pipeline as pipe        # noqa: E402
 import categories              # noqa: E402
 import fun                     # noqa: E402
 import titles                  # noqa: E402
+import translate               # noqa: E402
 import youtube_client as yt    # noqa: E402
 import branding                # noqa: E402
 import jobs                    # noqa: E402
@@ -75,6 +76,7 @@ class Decision(BaseModel):
 class SourcePatch(BaseModel):
     enabled: bool | None = None
     has_consent: bool | None = None
+    language: str | None = None
 
 
 class ProfileCreate(BaseModel):
@@ -99,6 +101,7 @@ class ProfilePatch(BaseModel):
     cta_enabled: bool | None = None           # botones de suscribirse/compartir
     category_mix: dict[str, float] | None = None      # {"Gaming":2,"Charla":1}
     category_exclude: list[str] | None = None
+    languages: list[str] | None = None                # ["es"] | ["es","en"]
     min_publish_gap_min: int | None = None
     min_fun_score: float | None = None
     output_format: str | None = None          # short | video | both
@@ -168,6 +171,10 @@ def patch_source(source_id: int, body: SourcePatch):
         if body.has_consent is not None:
             conn.execute("UPDATE sources SET has_consent=? WHERE id=?",
                          (int(body.has_consent), source_id))
+        if body.language is not None:
+            # 'manual' marca que esto lo puso una persona: ni la API ni Whisper lo pisan.
+            conn.execute("UPDATE sources SET language=?, language_origin='manual' "
+                         "WHERE id=?", (body.language or None, source_id))
         conn.commit()
         return pipe.source_stats(conn, source_id)
     finally:
@@ -276,15 +283,18 @@ def decide(clip_id: int, body: Decision):
 
 
 # ── PROFILES (canales de YouTube destino) ──────────────────────────────────────
-JSON_FIELDS = ("publish_times", "tags", "categories", "category_mix", "category_exclude")
+JSON_FIELDS = ("publish_times", "tags", "categories", "category_mix",
+               "category_exclude", "languages")
 
 
 def _profile_row(conn, row) -> dict:
     """Serializa un profile con sus fuentes, blacklist y estado de la cola."""
     p = dict(row)
     for f in JSON_FIELDS:
-        # category_mix es un objeto de pesos; el resto son listas.
-        vacio: dict | list = {} if f == "category_mix" else []
+        # category_mix es un objeto de pesos; languages trae español por defecto;
+        # el resto son listas vacías.
+        vacio: dict | list = ({} if f == "category_mix"
+                              else ["es"] if f == "languages" else [])
         try:
             p[f] = json.loads(p[f]) if p.get(f) else vacio
         except (json.JSONDecodeError, TypeError):
@@ -470,6 +480,7 @@ def propose_today(profile_id: int, min_age_hours: int = 12, window_days: int = 7
         BASE = f"""
             WITH ranked AS (
                 SELECT c.*, s.slug AS source_slug, s.platform,
+                       COALESCE(s.language, 'es') AS idioma,
                        COALESCE(c.category_group, 'Otros') AS familia,
                        ROW_NUMBER() OVER (
                            PARTITION BY COALESCE(c.cluster_key, 'solo:' || c.id)
@@ -498,9 +509,22 @@ def propose_today(profile_id: int, min_age_hours: int = 12, window_days: int = 7
         mezcla = _json("category_mix", {})
         cupo = prof["uploads_per_day"]
 
-        filtro_excl = ""
+        # Idiomas admitidos por el canal. Lo que no sea español se traduce y lleva
+        # subtítulos al renderizar; aquí sólo se decide si entra o no. El filtro va
+        # SUELTO porque tiene que aplicarse en las dos ramas: con mezcla de categorías
+        # la consulta es otra y se colarían clips en cualquier idioma.
+        idiomas = _json("languages", ["es"])
+        filtro_idioma = ""
+        params_idioma: tuple = ()
+        if idiomas:
+            filtro_idioma = f" AND idioma IN ({','.join('?' * len(idiomas))})"
+            params_idioma = tuple(idiomas)
+
+        filtro_excl = filtro_idioma
+        params_excl: tuple = params_idioma
         if excluidas:
-            filtro_excl = f" AND familia NOT IN ({','.join('?' * len(excluidas))})"
+            filtro_excl += f" AND familia NOT IN ({','.join('?' * len(excluidas))})"
+            params_excl = params_idioma + tuple(excluidas)
 
         rows = []
         if mezcla:
@@ -512,9 +536,9 @@ def propose_today(profile_id: int, min_age_hours: int = 12, window_days: int = 7
                 # El piso evita que una familia flaca rellene su hueco con cualquier
                 # cosa. Si no llega, ese cupo se reparte abajo entre lo mejor que haya.
                 rows += conn.execute(
-                    BASE + " AND familia = ? AND fun_score >= ?"
+                    BASE + filtro_idioma + " AND familia = ? AND fun_score >= ?"
                            " ORDER BY fun_score DESC, views DESC LIMIT ?",
-                    (*base_params, familia, piso, n)).fetchall()
+                    (*base_params, *params_idioma, familia, piso, n)).fetchall()
 
             # Cupos que quedaron sin cubrir: se completan con lo mejor que quede,
             # respetando el mismo piso de calidad.
@@ -523,12 +547,12 @@ def propose_today(profile_id: int, min_age_hours: int = 12, window_days: int = 7
                 extra = conn.execute(
                     BASE + filtro_excl + " AND fun_score >= ?"
                            " ORDER BY fun_score DESC, views DESC LIMIT ?",
-                    (*base_params, *excluidas, piso, cupo * 4)).fetchall()
+                    (*base_params, *params_excl, piso, cupo * 4)).fetchall()
                 rows += [r for r in extra if r["id"] not in ya][:cupo - len(rows)]
         else:
             rows = conn.execute(
                 BASE + filtro_excl + " ORDER BY fun_score DESC, views DESC LIMIT ?",
-                (*base_params, *excluidas, cupo)).fetchall()
+                (*base_params, *params_excl, cupo)).fetchall()
 
         tpl = prof["title_template"]
         ptags = json.loads(prof["tags"]) if prof["tags"] else []
@@ -543,6 +567,16 @@ def propose_today(profile_id: int, min_age_hours: int = 12, window_days: int = 7
         created = []
         for r in rows:
             clip = dict(r)
+
+            # El título del clip viene en el idioma de la fuente. Un canal para público
+            # español con enganches en inglés no tiene sentido, así que se traduce
+            # antes de construir los textos.
+            if (clip.get("idioma") or "es") != "es" and clip.get("title"):
+                try:
+                    clip["title"] = translate.traducir(
+                        clip["title"], clip["idioma"], "es") or clip["title"]
+                except Exception:  # noqa: BLE001 - si falla, se queda el original
+                    pass
             cur = conn.execute(
                 "INSERT INTO profile_queue (profile_id, clip_id, score, eligible, status, "
                 "title, description, tags, kind, hook) VALUES (?,?,?,1,'new',?,?,?,?,?)",
@@ -704,7 +738,9 @@ def next_publish_slot(profile: dict, taken: list[datetime] | None = None
     now = datetime.now(tz)
 
     candidatos: list[datetime] = []
-    for day_offset in range(0, 8):        # hasta una semana por delante
+    # Tres semanas por delante: con dos publicaciones al día, una semana se llena en
+    # cuanto se programan varios lotes seguidos y el buscador se quedaba sin huecos.
+    for day_offset in range(0, 22):
         for t in times:
             try:
                 hh, mm = (int(x) for x in str(t).split(":")[:2])
@@ -809,8 +845,9 @@ def upload_to_youtube(queue_id: int, body: UploadReq):
         if body.schedule:
             slot = next_publish_slot(dict(row), ocupados)
             if not slot:
-                raise HTTPException(400, "No hay horarios libres en la próxima semana "
-                                         "que respeten la separación mínima del canal")
+                raise HTTPException(400, "No hay horarios libres en las próximas 3 "
+                                         "semanas que respeten la separación mínima. "
+                                         "Añade horarios de publicación al canal.")
             publish_at = slot[0]
 
         # El candado anti-ráfaga. `force` existe para casos puntuales, pero por defecto
@@ -1389,7 +1426,12 @@ def profile_metrics(profile_id: int):
                 "ok": (per_month / 30) >= row["uploads_per_day"],
             },
             "pipeline": prof["queue"],
-            "quota": yt.quota_budget(row["uploads_per_day"]),
+            "quota": yt.quota_budget(
+                row["uploads_per_day"],
+                conn.execute("SELECT COUNT(*) n FROM uploads u "
+                             "JOIN profile_queue q ON q.id = u.queue_id "
+                             "WHERE q.profile_id = ? AND date(u.uploaded_at) = date('now')",
+                             (profile_id,)).fetchone()["n"]),
             "youtube": {
                 "connected": prof["youtube"]["connected"],
                 "uploads": agg["n"] or 0,

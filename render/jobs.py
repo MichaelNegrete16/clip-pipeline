@@ -21,7 +21,9 @@ import compilation         # noqa: E402
 import db as db_mod        # noqa: E402
 import renderer            # noqa: E402
 import storage             # noqa: E402
+import subtitles           # noqa: E402
 import transcribe          # noqa: E402
+import translate           # noqa: E402
 
 MEDIA = ROOT / "media"
 
@@ -32,7 +34,8 @@ _pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="render")
 def _load_job(conn, queue_id: int) -> dict | None:
     row = conn.execute(
         """SELECT q.id AS queue_id, q.profile_id, q.hook, c.*,
-                  s.slug AS source_slug, s.platform,
+                  s.slug AS source_slug, s.platform, s.language AS source_language,
+                  s.language_origin,
                   p.watermark_path, p.output_format, p.vertical_style, p.cta_enabled,
                   p.censor_enabled
            FROM profile_queue q
@@ -43,7 +46,7 @@ def _load_job(conn, queue_id: int) -> dict | None:
     return dict(row) if row else None
 
 
-IN_PROGRESS = ("pending", "downloading", "transcribing", "rendering")
+IN_PROGRESS = ("pending", "downloading", "transcribing", "translating", "rendering")
 
 # Si una fila lleva este tiempo sin latir, su proceso murió: nada tarda tanto sin
 # actualizar estado, ni transcribiendo un clip largo.
@@ -112,17 +115,40 @@ def _work(queue_id: int, render_id: int) -> None:
         raw = renderer.download_clip(job, MEDIA / "raw")
 
         audio_graph, transcript_json, bleeps = None, None, 0
-        if job.get("censor_enabled"):
-            terms = [dict(r) for r in conn.execute(
-                "SELECT term, severity FROM blacklist_terms "
-                "WHERE profile_id = ? OR profile_id IS NULL", (job["profile_id"],))]
-            if terms:
-                _set_status(conn, render_id, "transcribing")
-                wav = transcribe.extract_audio(raw, MEDIA / "raw" / f"a_{job['id']}.wav")
-                try:
-                    result = transcribe.transcribe(wav)
-                    ranges, rejects = transcribe.find_blacklisted(result["words"], terms)
+        subs_path = None
 
+        terms = [dict(r) for r in conn.execute(
+            "SELECT term, severity FROM blacklist_terms "
+            "WHERE profile_id = ? OR profile_id IS NULL", (job["profile_id"],))]
+        censurar = bool(job.get("censor_enabled")) and bool(terms)
+        # Todo lo que no sea español lleva subtítulos traducidos. Si el idioma de la
+        # fuente no se sabe (Kick sólo lo expone en vivo), lo decide Whisper.
+        idioma_fuente = (job.get("source_language") or "").lower() or None
+        traducir = idioma_fuente is not None and idioma_fuente != "es"
+
+        if censurar or traducir or idioma_fuente is None:
+            _set_status(conn, render_id, "transcribing")
+            wav = transcribe.extract_audio(raw, MEDIA / "raw" / f"a_{job['id']}.wav")
+            try:
+                result = transcribe.transcribe(wav, language=idioma_fuente)
+                detectado = (result.get("language") or "").lower()
+
+                # El audio manda sobre los metadatos. `broadcaster_language` lo pone el
+                # streamer a mano y envejece: spreen figura como portugués siendo
+                # argentino. Si Whisper oye otra cosa, se corrige — salvo que el
+                # idioma se haya fijado a mano, que eso vale más que ambos.
+                if detectado and detectado != idioma_fuente \
+                        and job.get("language_origin") != "manual":
+                    conn.execute(
+                        "UPDATE sources SET language = ?, language_origin = 'detectado' "
+                        "WHERE id = ? AND COALESCE(language_origin,'') <> 'manual'",
+                        (detectado, job["source_id"]))
+                    conn.commit()
+                    idioma_fuente = detectado
+                    traducir = detectado != "es"
+
+                if censurar:
+                    ranges, rejects = transcribe.find_blacklisted(result["words"], terms)
                     if rejects:
                         # severity 'reject': el clip no se publica, ni pitado.
                         motivo = ", ".join(sorted(set(rejects)))
@@ -140,11 +166,27 @@ def _work(queue_id: int, render_id: int) -> None:
                     # palabra escrita en el subtítulo no censura nada.
                     for s in result["segments"]:
                         s["text"] = transcribe.censor_text(s["text"], terms)
-                    transcript_json = json.dumps(
-                        {"segments": result["segments"], "bleeped": ranges},
-                        ensure_ascii=False)
-                finally:
-                    storage._unlink(wav)
+
+                segs = result["segments"]
+                if traducir and segs:
+                    _set_status(conn, render_id, "translating")
+                    segs = translate.traducir_segmentos(segs, idioma_fuente, "es")
+                    # La blacklist se aplica OTRA VEZ sobre el español traducido: la
+                    # primera pasada mira las palabras del idioma original, así que una
+                    # grosería que nace en la traducción se colaría intacta al
+                    # subtítulo. Pasó con un clip de xqc.
+                    if terms:
+                        for s in segs:
+                            s["text"] = transcribe.censor_text(s["text"], terms)
+                    subs_path = subtitles.construir_ass(
+                        segs, MEDIA / "comp" / f"subs_{job['id']}.ass")
+
+                transcript_json = json.dumps(
+                    {"segments": segs, "bleeped": ranges if censurar else [],
+                     "language": idioma_fuente, "translated": bool(traducir)},
+                    ensure_ascii=False)
+            finally:
+                storage._unlink(wav)
 
         _set_status(conn, render_id, "rendering")
         style = job.get("vertical_style") or "blur"
@@ -159,7 +201,8 @@ def _work(queue_id: int, render_id: int) -> None:
             watermark=wm_path if wm_path and wm_path.exists() else None,
             hook=job.get("hook"),
             cta=bool(job.get("cta_enabled", 1)),
-            audio_graph=audio_graph)
+            audio_graph=audio_graph,
+            subs=subs_path)
 
         info = renderer.probe(out)
         _set_status(conn, render_id, "done",
