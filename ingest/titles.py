@@ -39,14 +39,20 @@ def clean_source_title(raw: str | None) -> str:
     return t
 
 
-def build_title(clip: dict, template: str | None, *, is_short: bool = True) -> str:
+def build_title(clip: dict, template: str | None, *, is_short: bool = True,
+                blacklist: list[dict] | None = None) -> str:
     """Arma el título final a partir de la plantilla del profile.
 
     Variables: {title} {source} {category}
     """
-    clean = clean_source_title(clip.get("title"))
+    clean = _sin_palabrotas(clean_source_title(clip.get("title")), blacklist)
     source = clip.get("source_slug") or ""
     category = clip.get("category") or ""
+
+    # Si al quitar la grosería el título se queda en nada, mejor uno genérico que
+    # un resto sin sentido.
+    if len(clean) < 3:
+        clean = ""
 
     if not clean:
         clean = f"Lo mejor de {source}" if source else "Momento del directo"
@@ -67,14 +73,53 @@ def build_title(clip: dict, template: str | None, *, is_short: bool = True) -> s
 MAX_HOOK = 62           # más largo que esto no se lee de un vistazo en un Short
 
 
-def build_hook(clip: dict) -> str:
+def _sin_palabrotas(texto: str, blacklist: list[dict] | None) -> str:
+    """Quita del texto las palabras de la blacklist.
+
+    En el AUDIO se pita y en los subtítulos se enmascara, pero en un título los
+    asteriscos quedan peor que la palabra: "f*******" grita que había una grosería.
+    Aquí se elimina y ya. Si al quitarla no queda nada legible, el que llama usa el
+    título genérico.
+
+    Esto faltaba: la censura sólo miraba audio y subtítulos, así que se publicó un
+    Short titulado "pokemitas follables" pese a tener `follar` en la blacklist. Y el
+    título es justo lo que ven los clasificadores de YouTube y la gente en el feed.
+    """
+    if not texto or not blacklist:
+        return texto
+
+    claves = []
+    for t in blacklist:
+        k = re.sub(r"[^a-záéíóúñ0-9]", "",
+                   (t.get("term") or "").lower())
+        if k:
+            claves.append(k)
+    if not claves:
+        return texto
+
+    def limpio(palabra: str) -> str:
+        base = re.sub(r"[^a-záéíóúñ0-9]", "", palabra.lower())
+        base = (base.replace("á", "a").replace("é", "e").replace("í", "i")
+                    .replace("ó", "o").replace("ú", "u"))
+        for k in claves:
+            kk = (k.replace("á", "a").replace("é", "e").replace("í", "i")
+                   .replace("ó", "o").replace("ú", "u"))
+            if base == kk or (len(kk) >= 4 and kk in base):
+                return ""
+        return palabra
+
+    salida = " ".join(p for p in (limpio(w) for w in texto.split()) if p)
+    return re.sub(r"\s+", " ", salida).strip(" |-–—·,.")
+
+
+def build_hook(clip: dict, blacklist: list[dict] | None = None) -> str:
     """Texto de enganche para pintar SOBRE el video.
 
     No es el título de YouTube: ahí van el canal y #Shorts porque sirven para búsqueda
     y algoritmo. En pantalla eso sólo estorba — se quiere la frase pelada y corta.
     """
-    text = clean_source_title(clip.get("title"))
-    if not text:
+    text = _sin_palabrotas(clean_source_title(clip.get("title")), blacklist)
+    if not text or len(text) < 3:
         return ""
 
     # Quitar el nombre del streamer, hashtags y colas de plantilla si vinieran pegados.
@@ -123,7 +168,8 @@ def build_hashtags(clip: dict, is_short: bool = True) -> list[str]:
     return out[:5]
 
 
-def build_description(clip: dict, profile: dict, is_short: bool = True) -> str:
+def build_description(clip: dict, profile: dict, is_short: bool = True,
+                      blacklist: list[dict] | None = None) -> str:
     """Descripción con atribución al creador original.
 
     NO se afirma tener permiso: escribirlo sin tenerlo es una declaración falsa, y ante
@@ -136,7 +182,8 @@ def build_description(clip: dict, profile: dict, is_short: bool = True) -> str:
     canal_url = (f"https://www.twitch.tv/{source}" if clip.get("platform") == "twitch"
                  else f"https://kick.com/{source}")
 
-    lines = [clean_source_title(clip.get("title")) or "Momento del directo", ""]
+    encabezado = _sin_palabrotas(clean_source_title(clip.get("title")), blacklist)
+    lines = [encabezado if len(encabezado) >= 3 else "Momento del directo", ""]
     lines.append(" ".join(build_hashtags(clip, is_short)))
     lines.append("")
     if source:

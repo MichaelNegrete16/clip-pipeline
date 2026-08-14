@@ -43,6 +43,14 @@ estupido | bleep
 idiota | bleep
 
 # ── Sexual explícito ───────────────────────────────────────────────────────────
+# Se listan RAÍCES, no sólo infinitivos: "follar" no cubre "follable" ni "follando"
+# porque no comparten la cadena completa. Con la raíz "folla" caen todas.
+# No se deduce la raíz automáticamente a propósito: de "violar" saldría "viol" y
+# descartaría clips que digan "violín" o "violeta".
+folla | bleep
+follo | bleep
+chinga | bleep
+verg | bleep
 follar | bleep
 polla | bleep
 pene | bleep

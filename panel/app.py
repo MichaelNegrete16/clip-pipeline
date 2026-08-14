@@ -533,6 +533,12 @@ def propose_today(profile_id: int, min_age_hours: int = 12, window_days: int = 7
         tpl = prof["title_template"]
         ptags = json.loads(prof["tags"]) if prof["tags"] else []
         is_short = prof["output_format"] in ("short", "both")
+        # La blacklist también limpia título, enganche y descripción: antes sólo
+        # tocaba el audio y los subtítulos, y se publicó un Short con una grosería
+        # en el propio título de YouTube.
+        blacklist = [dict(r) for r in conn.execute(
+            "SELECT term, severity FROM blacklist_terms "
+            "WHERE profile_id = ? OR profile_id IS NULL", (profile_id,))]
 
         created = []
         for r in rows:
@@ -541,11 +547,12 @@ def propose_today(profile_id: int, min_age_hours: int = 12, window_days: int = 7
                 "INSERT INTO profile_queue (profile_id, clip_id, score, eligible, status, "
                 "title, description, tags, kind, hook) VALUES (?,?,?,1,'new',?,?,?,?,?)",
                 (profile_id, clip["id"], clip["views"],
-                 titles.build_title(clip, tpl, is_short=is_short),
-                 titles.build_description(clip, dict(prof), is_short=is_short),
+                 titles.build_title(clip, tpl, is_short=is_short, blacklist=blacklist),
+                 titles.build_description(clip, dict(prof), is_short=is_short,
+                                          blacklist=blacklist),
                  json.dumps(titles.build_tags(clip, ptags), ensure_ascii=False),
                  "short" if is_short else "video",
-                 titles.build_hook(clip)),
+                 titles.build_hook(clip, blacklist)),
             )
             created.append(cur.lastrowid)
         conn.commit()
