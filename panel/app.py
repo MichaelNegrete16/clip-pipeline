@@ -733,7 +733,10 @@ def next_publish_slot(profile: dict, taken: list[datetime] | None = None
     except Exception:  # noqa: BLE001 - zona inválida en config
         tz = ZoneInfo("America/Bogota")
 
-    gap = timedelta(minutes=int(profile["min_publish_gap_min"] or 45))
+    # `or 45` estaría mal: 0 es falsy en Python, así que poner la separación en 0 para
+    # desactivar el candado la dejaba en 45 y los videos se repartían por días.
+    bruto = profile["min_publish_gap_min"]
+    gap = timedelta(minutes=int(bruto if bruto is not None else 45))
     ocupados = taken or []
     now = datetime.now(tz)
 
@@ -768,7 +771,8 @@ def _gap_ok(profile: dict, taken: list[datetime],
     pasaban de mil vistas. La cuenta que importa es la separación entre PUBLICACIONES,
     no entre subidas: un video programado se sube ya pero se publica después.
     """
-    gap = timedelta(minutes=int(profile.get("min_publish_gap_min") or 45))
+    bruto = profile.get("min_publish_gap_min")
+    gap = timedelta(minutes=int(bruto if bruto is not None else 45))
     if publish_at:
         momento = datetime.fromisoformat(publish_at.replace("Z", "+00:00"))
     else:
